@@ -1,0 +1,108 @@
+# ========================================
+# TRADING BOT CONFIGURATION
+# ========================================
+
+exchange:
+  name: binance
+  testnet: true
+  rate_limit: true
+  timeout: 30000  # ms
+
+# ========================================
+# TRADING PAIRS
+# ========================================
+trading:
+  pairs:
+    - SOL/USDT
+    - ETH/USDT
+    - BTC/USDT
+    - AVAX/USDT
+    - LINK/USDT
+    - DOT/USDT
+    - MATIC/USDT
+    - ADA/USDT
+    - DOGE/USDT
+    - XRP/USDT
+
+  timeframes:
+    - "10m"    # 10 minutes (will use closest: 15m on Binance)
+    - "2h"     # 2 hours
+
+  mode: both   # "spot", "futures", or "both"
+
+  # Only go long when price is above ALL these MAs
+  long_only_above_ma: [30, 50, 200]
+
+# ========================================
+# STRATEGY 1: RSI + MA200
+# ========================================
+strategy_rsi_ma200:
+  rsi_length: 14
+  rsi_overbought: 70
+  rsi_oversold: 30
+  ma_length: 200
+  enabled: true
+
+# ========================================
+# STRATEGY 2: BOLLINGER BANDS TREND
+# ========================================
+strategy_bollinger:
+  bb_length: 20
+  bb_mult: 2.0
+  atr_length: 14
+  sideways_atr_mult: 0.5   # band width <= 0.5 * ATR = sideways
+  enabled: true
+
+# ========================================
+# COMBINED STRATEGY (CONFLUENCE)
+# ========================================
+confluence:
+  # Both strategies must agree for entry
+  require_both: true
+  # In sideways market, switch to mean-reversion on BB
+  sideways_mean_reversion: true
+
+# ========================================
+# RISK MANAGEMENT
+# ========================================
+risk:
+  # Futures settings
+  futures:
+    risk_per_trade_pct: 3.0      # 3% of account per trade
+    leverage: 10                  # default leverage
+    max_open_positions: 3
+    max_daily_loss_pct: 10.0     # stop trading after 10% daily loss
+    stop_loss_pct: 2.0           # 2% SL
+    take_profit_pct: 4.0         # 4% TP (2:1 R:R)
+
+  # Spot settings
+  spot:
+    risk_per_trade_pct: 25.0     # 25% of capital per trade
+    max_open_positions: 3
+    max_daily_loss_pct: 15.0
+    stop_loss_pct: 3.0           # 3% SL
+    take_profit_pct: 6.0         # 6% TP (2:1 R:R)
+
+  # General
+  cooldown_seconds: 60           # min time between trades on same pair
+  warning_tightens_sl: true      # WARNING signal tightens SL by 50%
+
+# ========================================
+# NOTIFICATIONS
+# ========================================
+notifications:
+  telegram:
+    enabled: true
+    send_entries: true
+    send_exits: true
+    send_warnings: true
+    send_daily_summary: true
+
+# ========================================
+# LOGGING
+# ========================================
+logging:
+  level: INFO
+  file: logs/trading_bot.log
+  max_size_mb: 50
+  backup_count: 5
