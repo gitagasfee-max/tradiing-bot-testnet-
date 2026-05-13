@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
 Trading Bot with Telegram Interface - BAHASA GAUL EDITION
+Multi-Exchange Support: Binance, Bybit, Bitget, OKX, KuCoin, MEXC
 ===========================================================
 Features:
 - /start, /status, /help, /ping
 - /scan - Scan koin yang match strategy
-- /top - Top opportunities
-- /analyze <SYMBOL> - Analisis detail koin
+- /top - Top opportunities  
+- /analyze <SYMBOL> [exchange] - Analisis detail koin dari berbagai exchange
 """
 
 import logging
 import sys
 import os
 import random
+import asyncio
 import numpy as np
 from pathlib import Path
 
@@ -22,9 +24,28 @@ sys.path.insert(0, str(Path(__file__).parent))
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
+# Try import ccxt for real exchange data
+try:
+    import ccxt
+    CCXT_AVAILABLE = True
+except ImportError:
+    CCXT_AVAILABLE = False
+
 # Config
 BOT_TOKEN = "8726873215:AAF29V-EAayVmcnyy4R7SJFavrxYtj9ub10"
 CHAT_ID = "1130331223"
+
+# Supported Exchanges
+SUPPORTED_EXCHANGES = {
+    'binance': {'name': 'Binance', 'emoji': '🟡'},
+    'bybit': {'name': 'Bybit', 'emoji': '🟠'},
+    'bitget': {'name': 'Bitget', 'emoji': '🟢'},
+    'okx': {'name': 'OKX', 'emoji': '⚪'},
+    'kucoin': {'name': 'KuCoin', 'emoji': '🟢'},
+    'mexc': {'name': 'MEXC', 'emoji': '🔵'},
+    'gateio': {'name': 'Gate.io', 'emoji': '🔴'},
+    'htx': {'name': 'HTX', 'emoji': '🔵'},
+}
 
 # Logging
 logging.basicConfig(
@@ -247,12 +268,17 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "*🔍 Command Scanner:*\n"
         "• `/scan` - Scan semua koin, cari yang match strategy\n"
         "• `/top` - Liat top 5 peluang cuan\n"
-        "• `/analyze BTC` - Analisis detail satu koin\n\n"
+        "• `/analyze BTC` - Analisis dari SEMUA exchange\n"
+        "• `/analyze SOL binance` - Analisis dari Binance\n"
+        "• `/analyze ETH bybit` - Analisis dari Bybit\n\n"
+        "*🏦 Exchange Support:*\n"
+        "🟡 Binance | 🟠 Bybit | 🟢 Bitget\n"
+        "⚪ OKX | 🟢 KuCoin | 🔵 MEXC\n\n"
         "*📊 Command Info:*\n"
         "• `/start` - Mulai bot\n"
         "• `/status` - Cek status bot\n"
         "• `/ping` - Test koneksi\n"
-        "• `/exchanges` - List exchange yang di-support\n\n"
+        "• `/exchanges` - List exchange\n\n"
         "*🎯 Strategy yang dipake:*\n"
         "1️⃣ RSI(14) + MA200 - Cari oversold di uptrend\n"
         "2️⃣ Bollinger Bands - Cari breakout/bounce\n"
@@ -354,12 +380,168 @@ async def top_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error bro: {e}")
 
 
+async def fetch_real_ohlcv(exchange_id: str, symbol: str, timeframe: str = '1h', limit: int = 250):
+    """Fetch real OHLCV data from exchange using ccxt"""
+    if not CCXT_AVAILABLE:
+        return None
+    
+    try:
+        exchange_class = getattr(ccxt, exchange_id)
+        exchange = exchange_class({
+            'enableRateLimit': True,
+            'timeout': 15000,
+        })
+        
+        # Load markets
+        await asyncio.get_event_loop().run_in_executor(None, exchange.load_markets)
+        
+        # Check if symbol exists
+        if symbol not in exchange.symbols:
+            return None
+        
+        # Fetch OHLCV
+        ohlcv = await asyncio.get_event_loop().run_in_executor(
+            None, 
+            lambda: exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+        )
+        
+        return ohlcv
+        
+    except Exception as e:
+        logger.warning(f"Failed to fetch from {exchange_id}: {e}")
+        return None
+
+
+def analyze_ohlcv_data(ohlcv_data, symbol: str, exchange: str):
+    """Analyze OHLCV data and return analysis dict"""
+    if not ohlcv_data or len(ohlcv_data) < 50:
+        return None
+    
+    data = np.array(ohlcv_data)
+    closes = data[:, 4]
+    current_price = closes[-1]
+    
+    # Calculate indicators
+    rsi = calc_rsi(closes, 14)
+    ma30 = calc_sma(closes, 30) if len(closes) >= 30 else current_price
+    ma50 = calc_sma(closes, 50) if len(closes) >= 50 else current_price
+    ma200 = calc_sma(closes, 200) if len(closes) >= 200 else calc_sma(closes, len(closes))
+    bb_upper, bb_mid, bb_lower, bb_width = calc_bb(closes, 20, 2.0)
+    
+    # Determine trend
+    if current_price > ma30 > ma50:
+        trend = "UPTREND"
+        trend_indo = "📈 LAGI NAIK BRO!"
+    elif current_price < ma30 < ma50:
+        trend = "DOWNTREND" 
+        trend_indo = "📉 LAGI TURUN NIH"
+    else:
+        trend = "SIDEWAYS"
+        trend_indo = "➡️ LAGI SIDEWAYS"
+    
+    # Calculate score
+    score = 0
+    alasan = []
+    
+    # RSI Analysis
+    if rsi <= 30:
+        score += 30
+        alasan.append("🔥 RSI oversold banget, siap-siap mantul!")
+    elif rsi <= 40:
+        score += 15
+        alasan.append("👀 RSI udah mulai rendah, potensi naik")
+    elif rsi >= 70:
+        score -= 30
+        alasan.append("⚠️ RSI overbought, hati-hati koreksi!")
+    elif rsi >= 60:
+        score -= 15
+        alasan.append("🤔 RSI udah tinggi, agak risky")
+    else:
+        alasan.append("😐 RSI masih normal, belum ada signal kuat")
+    
+    # MA200 Analysis
+    pct_from_ma200 = ((current_price / ma200) - 1) * 100 if ma200 > 0 else 0
+    if current_price > ma200:
+        score += 20
+        alasan.append(f"✅ Harga di atas MA200 (+{pct_from_ma200:.1f}%), trend sehat!")
+    else:
+        score -= 20
+        alasan.append(f"❌ Harga di bawah MA200 ({pct_from_ma200:.1f}%), masih bearish")
+    
+    # MA Stack
+    if current_price > ma30 > ma50 > ma200:
+        score += 15
+        alasan.append("🚀 MA stack bullish (30>50>200), mantap!")
+    elif current_price < ma30 < ma50 < ma200:
+        score -= 15
+        alasan.append("💀 MA stack bearish, hati-hati!")
+    
+    # Bollinger Bands
+    if current_price <= bb_lower * 1.02:
+        score += 20
+        alasan.append("💎 Harga di lower BB, potensi bounce!")
+    elif current_price >= bb_upper * 0.98:
+        score -= 20
+        alasan.append("🔻 Harga di upper BB, potensi reject")
+    
+    if bb_width <= 3:
+        alasan.append("🎯 BB squeeze! Siap-siap breakout!")
+    
+    # Determine signal
+    if score >= 50:
+        signal = "🟢🟢🟢 STRONG BUY"
+        saran = "GAS POLL BRO! Signal kuat banget nih!"
+    elif score >= 25:
+        signal = "🟢 BUY"
+        saran = "Boleh masuk bro, tapi pake SL ya!"
+    elif score >= 10:
+        signal = "🟡 WEAK BUY"
+        saran = "Lumayan sih, tapi tunggu konfirmasi dulu"
+    elif score <= -50:
+        signal = "🔴🔴🔴 STRONG SELL"
+        saran = "BAHAYA BRO! Mending cabut atau short!"
+    elif score <= -25:
+        signal = "🔴 SELL"
+        saran = "Kurang bagus nih, mending hindari dulu"
+    elif score <= -10:
+        signal = "🟡 WEAK SELL"
+        saran = "Agak risky, better wait and see"
+    else:
+        signal = "⚪ NETRAL"
+        saran = "Belum ada signal jelas, sabar dulu bro"
+    
+    return {
+        'symbol': symbol,
+        'exchange': exchange,
+        'price': current_price,
+        'rsi': rsi,
+        'ma30': ma30,
+        'ma50': ma50,
+        'ma200': ma200,
+        'bb_upper': bb_upper,
+        'bb_lower': bb_lower,
+        'bb_width': bb_width,
+        'trend': trend,
+        'trend_indo': trend_indo,
+        'score': score,
+        'signal': signal,
+        'saran': saran,
+        'alasan': alasan,
+        'pct_from_ma200': pct_from_ma200
+    }
+
+
 async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /analyze <SYMBOL> command - FULL ANALYSIS"""
+    """Handle /analyze <SYMBOL> [exchange] command - MULTI-EXCHANGE ANALYSIS"""
     if not context.args:
         await update.message.reply_text(
             "⚠️ *Cara pakenya:*\n\n"
-            "`/analyze BTC` atau `/analyze SOLUSDT`\n\n"
+            "`/analyze BTC` - Analisis dari semua exchange\n"
+            "`/analyze SOL binance` - Analisis dari Binance aja\n"
+            "`/analyze ETH bybit` - Analisis dari Bybit aja\n\n"
+            "*Exchange yang di-support:*\n"
+            "🟡 `binance` | 🟠 `bybit` | 🟢 `bitget`\n"
+            "⚪ `okx` | 🟢 `kucoin` | 🔵 `mexc`\n\n"
             "*Contoh koin:*\n"
             "BTC, ETH, SOL, BNB, XRP, DOGE, ADA, AVAX, DOT, LINK",
             parse_mode="Markdown"
@@ -368,63 +550,177 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     symbol_input = context.args[0].upper()
     
+    # Check if user specified exchange
+    selected_exchange = None
+    if len(context.args) >= 2:
+        ex_input = context.args[1].lower()
+        if ex_input in SUPPORTED_EXCHANGES:
+            selected_exchange = ex_input
+    
     # Normalize symbol
     if not symbol_input.endswith('USDT'):
         symbol = f"{symbol_input}/USDT"
     else:
         symbol = symbol_input.replace('USDT', '/USDT')
     
-    await update.message.reply_text(f"🔍 *Lagi analisis {symbol}...*\nBentar ya bro!", parse_mode="Markdown")
+    coin_name = symbol.replace('/USDT', '')
+    
+    # Decide which exchanges to scan
+    if selected_exchange:
+        exchanges_to_scan = [selected_exchange]
+        await update.message.reply_text(
+            f"🔍 *Lagi analisis {symbol} dari {SUPPORTED_EXCHANGES[selected_exchange]['emoji']} {SUPPORTED_EXCHANGES[selected_exchange]['name']}...*\n"
+            f"Bentar ya bro!",
+            parse_mode="Markdown"
+        )
+    else:
+        exchanges_to_scan = ['binance', 'bybit', 'bitget', 'okx', 'kucoin', 'mexc']
+        await update.message.reply_text(
+            f"🔍 *Lagi analisis {symbol} dari SEMUA EXCHANGE...*\n"
+            f"🏦 Binance, Bybit, Bitget, OKX, KuCoin, MEXC\n"
+            f"Bentar ya bro, ini butuh waktu!",
+            parse_mode="Markdown"
+        )
     
     try:
-        r = generate_analysis(symbol)
+        all_results = []
         
-        # Build detailed message
-        msg = f"📊 *ANALISIS LENGKAP*\n"
-        msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+        for exchange_id in exchanges_to_scan:
+            ex_info = SUPPORTED_EXCHANGES[exchange_id]
+            
+            # Try to fetch real data first
+            ohlcv = None
+            if CCXT_AVAILABLE:
+                try:
+                    ohlcv = await fetch_real_ohlcv(exchange_id, symbol, '1h', 250)
+                except Exception as e:
+                    logger.warning(f"Real fetch failed for {exchange_id}: {e}")
+            
+            # If real data available, use it
+            if ohlcv and len(ohlcv) >= 50:
+                r = analyze_ohlcv_data(ohlcv, symbol, exchange_id)
+                if r:
+                    r['data_source'] = 'REAL'
+                    all_results.append(r)
+            else:
+                # Fall back to simulated data
+                r = generate_analysis(symbol)
+                r['exchange'] = exchange_id
+                r['data_source'] = 'SIMULATED'
+                # Add some randomness for different exchanges
+                r['price'] *= (1 + random.uniform(-0.001, 0.001))
+                r['score'] += random.randint(-5, 5)
+                all_results.append(r)
         
-        msg += f"🪙 *{r['symbol']}*\n"
-        msg += f"💰 Harga: `${r['price']:,.4f}`\n"
-        msg += f"🎯 Score: `{r['score']:+d}/100`\n"
-        msg += f"{r['trend_indo']}\n\n"
+        if not all_results:
+            await update.message.reply_text(
+                f"❌ *Waduh bro...*\n\n"
+                f"Ga bisa fetch data {symbol} dari exchange manapun.\n"
+                f"Coba koin lain atau cek koneksi internet!",
+                parse_mode="Markdown"
+            )
+            return
         
-        msg += f"*{r['signal']}*\n"
-        msg += f"_{r['saran']}_\n\n"
+        # If only one exchange, show detailed analysis
+        if len(all_results) == 1:
+            r = all_results[0]
+            ex_info = SUPPORTED_EXCHANGES.get(r['exchange'], {'emoji': '🏦', 'name': r['exchange']})
+            
+            msg = f"📊 *ANALISIS LENGKAP*\n"
+            msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            msg += f"🪙 *{r['symbol']}*\n"
+            msg += f"🏦 Exchange: {ex_info['emoji']} {ex_info['name']}\n"
+            msg += f"📡 Data: `{r.get('data_source', 'SIMULATED')}`\n"
+            msg += f"💰 Harga: `${r['price']:,.4f}`\n"
+            msg += f"🎯 Score: `{r['score']:+d}/100`\n"
+            msg += f"{r['trend_indo']}\n\n"
+            
+            msg += f"*{r['signal']}*\n"
+            msg += f"_{r['saran']}_\n\n"
+            
+            msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+            msg += f"📈 *INDIKATOR:*\n\n"
+            
+            # RSI
+            if r['rsi'] <= 30:
+                rsi_status = "🟢 OVERSOLD (Siap mantul!)"
+            elif r['rsi'] >= 70:
+                rsi_status = "🔴 OVERBOUGHT (Hati-hati!)"
+            else:
+                rsi_status = "⚪ Normal"
+            msg += f"• RSI(14): `{r['rsi']:.1f}` - {rsi_status}\n\n"
+            
+            # Moving Averages
+            msg += f"• MA30: `${r['ma30']:,.2f}`\n"
+            msg += f"• MA50: `${r['ma50']:,.2f}`\n"
+            msg += f"• MA200: `${r['ma200']:,.2f}`\n"
+            msg += f"• Jarak dari MA200: `{r['pct_from_ma200']:+.2f}%`\n\n"
+            
+            # Bollinger Bands
+            msg += f"• BB Upper: `${r['bb_upper']:,.2f}`\n"
+            msg += f"• BB Lower: `${r['bb_lower']:,.2f}`\n"
+            msg += f"• BB Width: `{r['bb_width']:.2f}%`\n\n"
+            
+            msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+            msg += f"🧠 *ANALISIS GUE:*\n\n"
+            
+            for alasan in r['alasan']:
+                msg += f"{alasan}\n"
+            
+            msg += f"\n━━━━━━━━━━━━━━━━━━━━\n"
+            msg += f"⚠️ *DISCLAIMER:*\n"
+            msg += f"_Ini bukan financial advice bro! DYOR dan pake risk management!_"
+            
+            await update.message.reply_text(msg, parse_mode="Markdown")
         
-        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"📈 *INDIKATOR:*\n\n"
-        
-        # RSI
-        if r['rsi'] <= 30:
-            rsi_status = "🟢 OVERSOLD (Siap mantul!)"
-        elif r['rsi'] >= 70:
-            rsi_status = "🔴 OVERBOUGHT (Hati-hati!)"
         else:
-            rsi_status = "⚪ Normal"
-        msg += f"• RSI(14): `{r['rsi']:.1f}` - {rsi_status}\n\n"
-        
-        # Moving Averages
-        msg += f"• MA30: `${r['ma30']:,.2f}`\n"
-        msg += f"• MA50: `${r['ma50']:,.2f}`\n"
-        msg += f"• MA200: `${r['ma200']:,.2f}`\n"
-        msg += f"• Jarak dari MA200: `{r['pct_from_ma200']:+.2f}%`\n\n"
-        
-        # Bollinger Bands
-        msg += f"• BB Upper: `${r['bb_upper']:,.2f}`\n"
-        msg += f"• BB Lower: `${r['bb_lower']:,.2f}`\n"
-        msg += f"• BB Width: `{r['bb_width']:.2f}%`\n\n"
-        
-        msg += f"━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"🧠 *ANALISIS GUE:*\n\n"
-        
-        for alasan in r['alasan']:
-            msg += f"{alasan}\n"
-        
-        msg += f"\n━━━━━━━━━━━━━━━━━━━━\n"
-        msg += f"⚠️ *DISCLAIMER:*\n"
-        msg += f"_Ini bukan financial advice bro! DYOR dan pake risk management!_"
-        
-        await update.message.reply_text(msg, parse_mode="Markdown")
+            # Multiple exchanges - show comparison
+            msg = f"📊 *MULTI-EXCHANGE ANALYSIS*\n"
+            msg += f"🪙 *{symbol}*\n"
+            msg += f"━━━━━━━━━━━━━━━━━━━━\n\n"
+            
+            # Sort by score
+            all_results.sort(key=lambda x: x['score'], reverse=True)
+            
+            for r in all_results:
+                ex_info = SUPPORTED_EXCHANGES.get(r['exchange'], {'emoji': '🏦', 'name': r['exchange']})
+                
+                # Signal emoji
+                if r['score'] >= 30:
+                    sig_emoji = "🟢"
+                elif r['score'] <= -30:
+                    sig_emoji = "🔴"
+                else:
+                    sig_emoji = "⚪"
+                
+                msg += f"{ex_info['emoji']} *{ex_info['name'].upper()}*\n"
+                msg += f"   💰 `${r['price']:,.4f}`\n"
+                msg += f"   📊 Score: `{r['score']:+d}` | RSI: `{r['rsi']:.0f}`\n"
+                msg += f"   {sig_emoji} {r['signal']}\n"
+                msg += f"   📡 _{r.get('data_source', 'SIM')}_\n\n"
+            
+            msg += f"━━━━━━━━━━━━━━━━━━━━\n"
+            
+            # Best opportunity
+            best = all_results[0]
+            best_ex = SUPPORTED_EXCHANGES.get(best['exchange'], {'emoji': '🏦', 'name': best['exchange']})
+            
+            if best['score'] >= 20:
+                msg += f"🏆 *BEST BUY:* {best_ex['emoji']} {best_ex['name']}\n"
+                msg += f"   Score `{best['score']:+d}` - _{best['saran']}_\n\n"
+            elif best['score'] <= -20:
+                worst = all_results[-1]
+                worst_ex = SUPPORTED_EXCHANGES.get(worst['exchange'], {'emoji': '🏦', 'name': worst['exchange']})
+                msg += f"⚠️ *MOST BEARISH:* {worst_ex['emoji']} {worst_ex['name']}\n"
+                msg += f"   Score `{worst['score']:+d}` - _{worst['saran']}_\n\n"
+            else:
+                msg += f"😐 *VERDICT:* Belum ada signal kuat dari exchange manapun.\n\n"
+            
+            msg += f"_Ketik_ `/analyze {coin_name} binance` _buat detail satu exchange_\n\n"
+            msg += f"⚠️ _Disclaimer: Bukan financial advice bro!_"
+            
+            await update.message.reply_text(msg, parse_mode="Markdown")
         
     except Exception as e:
         await update.message.reply_text(f"❌ Gagal analisis {symbol}: {e}")
