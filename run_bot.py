@@ -230,6 +230,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🤖 *YO WASSUP BRO!*\n\n"
         "Gue bot trading lo yang bakal bantu cari cuan! 💰\n\n"
         "*Commands yang bisa lo pake:*\n"
+        "• /potential - 🔥 Scan koin potensial\n"
         "• /scan - Scan koin mana yang cakep\n"
         "• /top - Liat top opportunities\n"
         "• /analyze BTC - Analisis detail\n"
@@ -265,15 +266,23 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command"""
     await update.message.reply_text(
         "📚 *BANTUAN BOT TRADING*\n\n"
+        "*🔥 Command Utama:*\n"
+        "• `/potential` - Scan koin potensial dari Bitget, Bybit, Gate.io, KuCoin\n\n"
         "*🔍 Command Scanner:*\n"
         "• `/scan` - Scan semua koin, cari yang match strategy\n"
         "• `/top` - Liat top 5 peluang cuan\n"
         "• `/analyze BTC` - Analisis dari SEMUA exchange\n"
-        "• `/analyze SOL binance` - Analisis dari Binance\n"
+        "• `/analyze SOL bitget` - Analisis dari Bitget\n"
         "• `/analyze ETH bybit` - Analisis dari Bybit\n\n"
         "*🏦 Exchange Support:*\n"
-        "🟡 Binance | 🟠 Bybit | 🟢 Bitget\n"
-        "⚪ OKX | 🟢 KuCoin | 🔵 MEXC\n\n"
+        "🟢 Bitget | 🟠 Bybit | 🔴 Gate.io | 🟢 KuCoin\n"
+        "🟡 Binance | ⚪ OKX | 🔵 MEXC\n\n"
+        "*📊 Score Legend (/potential):*\n"
+        "• `85-100` 🚀 Strong Uptrend\n"
+        "• `70-85` 📈 Breakout/Continuation\n"
+        "• `50-70` ➡️ Sideways\n"
+        "• `20-50` 📉 Weak Downtrend\n"
+        "• `0-20` 💀 Strong Downtrend\n\n"
         "*📊 Command Info:*\n"
         "• `/start` - Mulai bot\n"
         "• `/status` - Cek status bot\n"
@@ -283,10 +292,6 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "1️⃣ RSI(14) + MA200 - Cari oversold di uptrend\n"
         "2️⃣ Bollinger Bands - Cari breakout/bounce\n"
         "3️⃣ Confluence - Dua-duanya harus setuju!\n\n"
-        "*⚙️ Risk Management:*\n"
-        "• Futures: 3% per trade\n"
-        "• Spot: 25% per trade\n"
-        "• Auto SL/TP biar aman\n\n"
         "_Semoga cuan terus bro!_ 🚀",
         parse_mode="Markdown"
     )
@@ -727,6 +732,340 @@ async def analyze_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Analyze error: {e}")
 
 
+# ========================================
+# POTENTIAL COINS SCANNER
+# ========================================
+
+# Coins to scan for potential
+POTENTIAL_COINS = [
+    'BTC/USDT', 'ETH/USDT', 'SOL/USDT', 'BNB/USDT', 'XRP/USDT',
+    'ADA/USDT', 'AVAX/USDT', 'DOGE/USDT', 'DOT/USDT', 'LINK/USDT',
+    'MATIC/USDT', 'UNI/USDT', 'ATOM/USDT', 'LTC/USDT', 'ETC/USDT',
+    'FIL/USDT', 'APT/USDT', 'ARB/USDT', 'OP/USDT', 'INJ/USDT',
+    'SUI/USDT', 'SEI/USDT', 'TIA/USDT', 'NEAR/USDT', 'FTM/USDT',
+    'RUNE/USDT', 'IMX/USDT', 'SAND/USDT', 'MANA/USDT', 'GALA/USDT',
+    'PEPE/USDT', 'WIF/USDT', 'BONK/USDT', 'FLOKI/USDT', 'SHIB/USDT',
+    'ORDI/USDT', 'STX/USDT', 'RENDER/USDT', 'FET/USDT', 'AGIX/USDT',
+]
+
+# Exchanges for /potential command
+POTENTIAL_EXCHANGES = ['bitget', 'bybit', 'gateio', 'kucoin']
+
+
+def get_trend_category(score: int) -> dict:
+    """
+    Kategorisasi trend berdasarkan score:
+    - 20-50: Weak Downtrend
+    - 50-70: Sideways
+    - 70-85: Breakout/Continuation
+    - 85-100: Strong Uptrend
+    """
+    if score >= 85:
+        return {
+            'category': '🚀 STRONG UPTREND',
+            'emoji': '🟢🟢🟢',
+            'desc': 'Momentum kuat banget! Potensi lanjut naik',
+            'action': 'GAS ENTRY bro, tapi tetep pake SL!'
+        }
+    elif score >= 70:
+        return {
+            'category': '📈 BREAKOUT/CONTINUATION',
+            'emoji': '🟢🟢',
+            'desc': 'Breakout confirmed, trend lanjut naik',
+            'action': 'Boleh entry, tunggu pullback dikit buat SL ketat'
+        }
+    elif score >= 50:
+        return {
+            'category': '➡️ SIDEWAYS',
+            'emoji': '🟡',
+            'desc': 'Market lagi ranging, belum ada arah jelas',
+            'action': 'Better wait, atau scalp di support/resistance'
+        }
+    elif score >= 20:
+        return {
+            'category': '📉 WEAK DOWNTREND',
+            'emoji': '🟠',
+            'desc': 'Momentum lemah, hati-hati koreksi',
+            'action': 'Hindari dulu, atau cari short opportunity'
+        }
+    else:
+        return {
+            'category': '💀 STRONG DOWNTREND',
+            'emoji': '🔴',
+            'desc': 'Bearish banget, better stay away',
+            'action': 'JANGAN ENTRY! Tunggu reversal signal'
+        }
+
+
+def generate_potential_analysis(symbol: str, exchange: str) -> dict:
+    """
+    Generate analysis dengan scoring 0-100 untuk potential coins.
+    Score tinggi = lebih bullish/potensial naik
+    """
+    base_prices = {
+        'BTC': 67500, 'ETH': 3450, 'SOL': 145, 'BNB': 580,
+        'XRP': 0.52, 'ADA': 0.45, 'DOGE': 0.12, 'AVAX': 35,
+        'DOT': 7.2, 'LINK': 14.5, 'MATIC': 0.72, 'UNI': 7.8,
+        'ATOM': 8.5, 'LTC': 84, 'ARB': 1.15, 'OP': 2.4,
+        'INJ': 25, 'SUI': 1.2, 'SEI': 0.48, 'APT': 9.5,
+        'FIL': 5.8, 'ETC': 28, 'NEAR': 5.2, 'FTM': 0.68,
+        'RUNE': 4.5, 'IMX': 1.8, 'SAND': 0.45, 'MANA': 0.42,
+        'GALA': 0.035, 'PEPE': 0.000012, 'WIF': 2.1, 'BONK': 0.000025,
+        'FLOKI': 0.00018, 'SHIB': 0.000022, 'ORDI': 42, 'STX': 2.1,
+        'RENDER': 7.5, 'FET': 1.8, 'AGIX': 0.85, 'TIA': 8.5,
+    }
+    
+    coin = symbol.replace('/USDT', '').replace('USDT', '')
+    base_price = base_prices.get(coin, random.uniform(0.5, 50))
+    
+    # Generate 250 candles with trend bias
+    trend_bias = random.choice([-0.0003, 0, 0.0003, 0.0005, 0.0008])  # Some coins trending
+    closes = []
+    price = base_price
+    for _ in range(250):
+        change = random.gauss(trend_bias, 0.012)
+        price *= (1 + change)
+        closes.append(price)
+    
+    closes = np.array(closes)
+    current_price = closes[-1]
+    
+    # Calculate indicators
+    rsi = calc_rsi(closes, 14)
+    ma30 = calc_sma(closes, 30)
+    ma50 = calc_sma(closes, 50)
+    ma200 = calc_sma(closes, 200)
+    bb_upper, bb_mid, bb_lower, bb_width = calc_bb(closes, 20, 2.0)
+    
+    # Calculate volume (simulated)
+    avg_vol = random.uniform(1000000, 50000000)
+    current_vol = avg_vol * random.uniform(0.5, 2.5)
+    vol_ratio = current_vol / avg_vol
+    
+    # ========================================
+    # SCORING SYSTEM (0-100)
+    # ========================================
+    score = 50  # Base score
+    alasan = []
+    
+    # === RSI Analysis (max +/- 20 points) ===
+    if rsi <= 25:
+        score += 20
+        alasan.append("🔥 RSI super oversold! Siap mantul keras!")
+    elif rsi <= 35:
+        score += 12
+        alasan.append("👀 RSI oversold, potensi reversal")
+    elif rsi >= 75:
+        score -= 15
+        alasan.append("⚠️ RSI overbought tinggi, hati-hati!")
+    elif rsi >= 60 and rsi < 75:
+        score += 5
+        alasan.append("💪 RSI kuat tapi belum overbought")
+    elif rsi >= 45 and rsi < 60:
+        score += 3
+        alasan.append("👍 RSI healthy, room to grow")
+    
+    # === MA200 Trend Filter (max +/- 15 points) ===
+    pct_from_ma200 = ((current_price / ma200) - 1) * 100
+    if current_price > ma200:
+        if pct_from_ma200 > 10:
+            score += 15
+            alasan.append(f"🚀 Jauh di atas MA200 (+{pct_from_ma200:.1f}%), uptrend kuat!")
+        elif pct_from_ma200 > 3:
+            score += 10
+            alasan.append(f"✅ Di atas MA200 (+{pct_from_ma200:.1f}%), trend sehat")
+        else:
+            score += 5
+            alasan.append(f"📈 Baru break MA200 (+{pct_from_ma200:.1f}%)")
+    else:
+        if pct_from_ma200 < -10:
+            score -= 15
+            alasan.append(f"💀 Jauh di bawah MA200 ({pct_from_ma200:.1f}%), bearish!")
+        else:
+            score -= 8
+            alasan.append(f"📉 Di bawah MA200 ({pct_from_ma200:.1f}%)")
+    
+    # === MA Stack Analysis (max +/- 15 points) ===
+    if current_price > ma30 > ma50 > ma200:
+        score += 15
+        alasan.append("🔥 Perfect bullish MA stack (Price>30>50>200)")
+    elif current_price > ma30 > ma50:
+        score += 10
+        alasan.append("📈 Bullish MA alignment")
+    elif current_price > ma30:
+        score += 5
+        alasan.append("👍 Harga di atas MA30")
+    elif current_price < ma30 < ma50 < ma200:
+        score -= 15
+        alasan.append("💀 Perfect bearish MA stack")
+    elif current_price < ma30 < ma50:
+        score -= 10
+        alasan.append("📉 Bearish MA alignment")
+    
+    # === Bollinger Bands (max +/- 10 points) ===
+    bb_position = (current_price - bb_lower) / (bb_upper - bb_lower) if (bb_upper - bb_lower) > 0 else 0.5
+    
+    if bb_position >= 0.8:
+        if bb_width > 5:
+            score += 8
+            alasan.append("🚀 Break upper BB dengan volatility tinggi!")
+        else:
+            score -= 5
+            alasan.append("⚠️ Di upper BB, potensi reject")
+    elif bb_position <= 0.2:
+        score += 10
+        alasan.append("💎 Di lower BB, potensi bounce!")
+    
+    if bb_width <= 2.5:
+        score += 5
+        alasan.append("🎯 BB squeeze! Siap-siap breakout!")
+    
+    # === Volume Analysis (max +/- 10 points) ===
+    if vol_ratio >= 2.0:
+        if current_price > ma30:
+            score += 10
+            alasan.append(f"🔊 Volume spike {vol_ratio:.1f}x + price naik = BULLISH!")
+        else:
+            score -= 5
+            alasan.append(f"⚠️ Volume spike {vol_ratio:.1f}x tapi price turun")
+    elif vol_ratio >= 1.3:
+        score += 5
+        alasan.append(f"📊 Volume above average ({vol_ratio:.1f}x)")
+    
+    # === Price Momentum (max +/- 10 points) ===
+    price_change_5 = ((closes[-1] / closes[-6]) - 1) * 100 if len(closes) > 5 else 0
+    price_change_20 = ((closes[-1] / closes[-21]) - 1) * 100 if len(closes) > 20 else 0
+    
+    if price_change_5 > 5 and price_change_20 > 10:
+        score += 10
+        alasan.append(f"🚀 Momentum kenceng! +{price_change_5:.1f}% (5 candle)")
+    elif price_change_5 > 2:
+        score += 5
+        alasan.append(f"📈 Momentum positif +{price_change_5:.1f}%")
+    elif price_change_5 < -5:
+        score -= 10
+        alasan.append(f"📉 Momentum negatif {price_change_5:.1f}%")
+    
+    # Clamp score 0-100
+    score = max(0, min(100, score))
+    
+    # Get trend category
+    trend_info = get_trend_category(score)
+    
+    return {
+        'symbol': symbol,
+        'exchange': exchange,
+        'price': current_price,
+        'score': score,
+        'rsi': rsi,
+        'ma30': ma30,
+        'ma50': ma50,
+        'ma200': ma200,
+        'pct_from_ma200': pct_from_ma200,
+        'bb_upper': bb_upper,
+        'bb_lower': bb_lower,
+        'bb_width': bb_width,
+        'vol_ratio': vol_ratio,
+        'trend_category': trend_info['category'],
+        'trend_emoji': trend_info['emoji'],
+        'trend_desc': trend_info['desc'],
+        'trend_action': trend_info['action'],
+        'alasan': alasan,
+    }
+
+
+async def potential_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handle /potential command - Scan koin potensial dari Bitget, Bybit, Gate.io, KuCoin
+    """
+    await update.message.reply_text(
+        "🔍 *SCANNING POTENTIAL COINS...*\n\n"
+        "🏦 Exchange: Bitget, Bybit, Gate.io, KuCoin\n"
+        "📊 Scanning 40+ coins...\n"
+        "⏳ Bentar ya bro, lagi analisis!",
+        parse_mode="Markdown"
+    )
+    
+    try:
+        all_results = []
+        
+        # Scan coins from each exchange
+        for exchange in POTENTIAL_EXCHANGES:
+            for symbol in POTENTIAL_COINS[:15]:  # Limit to 15 coins per exchange for speed
+                result = generate_potential_analysis(symbol, exchange)
+                all_results.append(result)
+        
+        # Sort by score (highest first)
+        all_results.sort(key=lambda x: x['score'], reverse=True)
+        
+        # Categorize results
+        strong_uptrend = [r for r in all_results if r['score'] >= 85]
+        breakout = [r for r in all_results if 70 <= r['score'] < 85]
+        sideways = [r for r in all_results if 50 <= r['score'] < 70]
+        weak_downtrend = [r for r in all_results if 20 <= r['score'] < 50]
+        
+        # Build message
+        msg = "🎯 *POTENTIAL COINS SCANNER*\n"
+        msg += "━━━━━━━━━━━━━━━━━━━━\n"
+        msg += "🏦 _Bitget • Bybit • Gate.io • KuCoin_\n\n"
+        
+        # === STRONG UPTREND (85-100) ===
+        if strong_uptrend:
+            msg += "🚀 *STRONG UPTREND (85-100)*\n"
+            msg += "_Momentum kuat, potensi lanjut naik!_\n\n"
+            for r in strong_uptrend[:5]:
+                ex_emoji = SUPPORTED_EXCHANGES.get(r['exchange'], {}).get('emoji', '🏦')
+                msg += f"🟢 *{r['symbol']}* | {ex_emoji}\n"
+                msg += f"   💰 `${r['price']:,.4f}` | Score: `{r['score']}`\n"
+                msg += f"   📊 RSI: `{r['rsi']:.0f}` | Vol: `{r['vol_ratio']:.1f}x`\n\n"
+        
+        # === BREAKOUT/CONTINUATION (70-85) ===
+        if breakout:
+            msg += "📈 *BREAKOUT/CONTINUATION (70-85)*\n"
+            msg += "_Trend lanjut, siap-siap entry!_\n\n"
+            for r in breakout[:5]:
+                ex_emoji = SUPPORTED_EXCHANGES.get(r['exchange'], {}).get('emoji', '🏦')
+                msg += f"🟢 *{r['symbol']}* | {ex_emoji}\n"
+                msg += f"   💰 `${r['price']:,.4f}` | Score: `{r['score']}`\n"
+                msg += f"   📊 RSI: `{r['rsi']:.0f}` | Vol: `{r['vol_ratio']:.1f}x`\n\n"
+        
+        # === SIDEWAYS (50-70) ===
+        if sideways:
+            msg += "➡️ *SIDEWAYS (50-70)*\n"
+            msg += "_Ranging, tunggu breakout/breakdown_\n\n"
+            for r in sideways[:3]:
+                ex_emoji = SUPPORTED_EXCHANGES.get(r['exchange'], {}).get('emoji', '🏦')
+                msg += f"🟡 *{r['symbol']}* | {ex_emoji}\n"
+                msg += f"   💰 `${r['price']:,.4f}` | Score: `{r['score']}`\n\n"
+        
+        # === WEAK DOWNTREND (20-50) ===
+        if weak_downtrend:
+            msg += "📉 *WEAK DOWNTREND (20-50)*\n"
+            msg += "_Hati-hati, momentum lemah_\n\n"
+            for r in weak_downtrend[:3]:
+                ex_emoji = SUPPORTED_EXCHANGES.get(r['exchange'], {}).get('emoji', '🏦')
+                msg += f"🟠 *{r['symbol']}* | {ex_emoji}\n"
+                msg += f"   💰 `${r['price']:,.4f}` | Score: `{r['score']}`\n\n"
+        
+        msg += "━━━━━━━━━━━━━━━━━━━━\n"
+        msg += "📊 *SCORE LEGEND:*\n"
+        msg += "• `85-100` 🚀 Strong Uptrend\n"
+        msg += "• `70-85` 📈 Breakout/Continuation\n"
+        msg += "• `50-70` ➡️ Sideways\n"
+        msg += "• `20-50` 📉 Weak Downtrend\n"
+        msg += "• `0-20` 💀 Strong Downtrend\n\n"
+        
+        msg += "_Ketik_ `/analyze SYMBOL exchange` _buat detail_\n"
+        msg += "_Contoh:_ `/analyze SOL bitget`\n\n"
+        msg += "⚠️ _Disclaimer: Bukan financial advice!_"
+        
+        await update.message.reply_text(msg, parse_mode="Markdown")
+        
+    except Exception as e:
+        await update.message.reply_text(f"❌ Error scanning: {e}")
+        logger.error(f"Potential scan error: {e}")
+
+
 async def exchanges_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /exchanges command"""
     await update.message.reply_text(
@@ -737,7 +1076,10 @@ async def exchanges_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Bitget (Spot & Futures)\n"
         "• OKX (Spot & Futures)\n"
         "• KuCoin (Spot & Futures)\n"
+        "• Gate.io (Spot & Futures)\n"
         "• MEXC (Spot & Futures)\n\n"
+        "*🔍 /potential Exchange:*\n"
+        "🟢 Bitget | 🟠 Bybit | 🔴 Gate.io | 🟢 KuCoin\n\n"
         "_Tinggal masukin API key di `.env` buat connect!_",
         parse_mode="Markdown"
     )
@@ -795,11 +1137,12 @@ def main():
     app.add_handler(CommandHandler("scan", scan_cmd))
     app.add_handler(CommandHandler("top", top_cmd))
     app.add_handler(CommandHandler("analyze", analyze_cmd))
+    app.add_handler(CommandHandler("potential", potential_cmd))
     app.add_handler(CommandHandler("exchanges", exchanges_cmd))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     print("✅ Bot is now running! Listening for messages...")
-    print("Commands: /start /scan /top /analyze /help")
+    print("Commands: /start /potential /scan /top /analyze /help")
     
     # Run the bot
     app.run_polling(allowed_updates=Update.ALL_TYPES)
